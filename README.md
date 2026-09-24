@@ -12,7 +12,7 @@
 
 ## 安装
 
-1. 下载 `module/musicpack_v141.zip`（或 `module/musicpack_extension.tefpkg`）
+1. 下载 `module/MusicPack_Extension.zip`（或 `module/MusicPack_Extension.tefpkg`）
 2. 通过 TEF Manager 安装模块
 3. 进游戏，模块目录自动生成 `config.json`
 4. 把音频文件放进模块目录下的 `music_packs/` 文件夹
