@@ -1,0 +1,15 @@
+{
+  "pkgId": "eternal.future.audiopackextension",
+  "name": "MusicPack Extension",
+  "author": "qing",
+  "description": "【模块介绍】\n泰拉瑞亚 TEF 音乐替换模块。可按 MusicID 精确替换游戏 BGM（如 Boss 曲、主菜单曲）。替换曲支持 ogg/mp3/wav。\n\n【使用方法】\n1. 安装本模块后进入游戏（首次运行会在模块目录自动生成 config.json）。\n2. 把音频文件放进模块目录下的 music_packs 文件夹。\n3. 编辑 config.json。它是一个列表，每条代表把某首曲子换成某个文件。比如想把克眼（克苏鲁之眼）的曲子换成 a.mp3，就写：\n\n{ \"enable\": true, \"music\": 5, \"file\": \"a.mp3\" }\n\nenable —— 这条是否生效（true 开 / false 关）\nmusic —— 要替换的曲子编号\nfile —— music_packs 里的音频文件名，要带后缀\n\n4. 重启游戏生效。",
+  "version": "1.0.0",
+  "versionCode": 1000,
+  "dependence": [],
+  "support": {
+    "android": {
+      "arm64": true,
+      "arm": false
+    }
+  }
+}

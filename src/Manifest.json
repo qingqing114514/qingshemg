@@ -1,0 +1,13 @@
+{
+  "type": "Module",
+  "file": "musicpack_extension.tefpkg",
+  "icon": {
+    "type": "Default"
+  },
+  "plugins": {
+    "type": "NULL"
+  },
+  "tefkernel": {
+    "minVersion": "1.0.0"
+  }
+}
