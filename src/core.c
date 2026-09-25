@@ -150,10 +150,18 @@ static JNIEnv* jenv(int* det){
 static void jdet(int d){ if(d&&g_vm) (*g_vm)->DetachCurrentThread(g_vm); }
 static void light_stop(void){
     if(!g_player) return;
+    jobject pl = g_player;
+    g_player = 0;
     int d=0; JNIEnv* e=jenv(&d); if(!e) return;
-    jclass c=(*e)->GetObjectClass(e,g_player);
-    if(c){ jmethodID st=(*e)->GetMethodID(e,c,"stop","()V"); if(st){ (*e)->CallVoidMethod(e,g_player,st); } (*e)->DeleteLocalRef(e,c); }
+    jclass c=(*e)->GetObjectClass(e,pl);
+    if(c){
+        jmethodID st=(*e)->GetMethodID(e,c,"stop","()V"); if(st) (*e)->CallVoidMethod(e,pl,st);
+        jmethodID rl=(*e)->GetMethodID(e,c,"release","()V"); if(rl) (*e)->CallVoidMethod(e,pl,rl);
+        (*e)->DeleteLocalRef(e,c);
+    }
     if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e);
+    (*e)->DeleteGlobalRef(e,pl);
+    g_playing_file[0]=0; g_playing_alive=0;
     jdet(d);
     LOGI("light_stop");
 }
@@ -186,6 +194,7 @@ static void* play_thread_fn(void* a){
 }
 static void update_player_vol(void){
     if(!g_player) return;
+    if(g_fading || !g_playing_alive) return;
     int d=0; JNIEnv* e=jenv(&d); if(!e) return;
     jclass c=(*e)->GetObjectClass(e,g_player);
     if(c){ jmethodID sv=(*e)->GetMethodID(e,c,"setVolume","(FF)V"); if(sv){ float vv=g_game_vol>0.0f?g_game_vol:0.75f; if(vv>1.0f)vv=1.0f; (*e)->CallVoidMethod(e,g_player,sv,vv,vv); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); } (*e)->DeleteLocalRef(e,c); }
@@ -227,11 +236,11 @@ static void* fade_thread_fn(void* a){
   (void)a; int d=0; JNIEnv* e=jenv(&d); if(!e){g_fade_running=0;return 0;}
   jobject pl = g_player; jmethodID sv=0;
   if(pl){ jclass c=(*e)->GetObjectClass(e,pl); if(c) sv=(*e)->GetMethodID(e,c,"setVolume","(FF)V"); }
-  int v=3500;
+  int v=1000;
   LOGI("FADE begin player=%p sv=%p", (void*)g_player, (void*)sv);
   while(v>0 && g_fade_running){
     v-=15; if(v<0)v=0;
-    if(pl && pl==g_player && sv){ float fbase=g_game_vol>0.0f?g_game_vol:0.75f; float fv=(float)v/3500.0f*fbase; (*e)->CallVoidMethod(e,pl,sv,fv,fv); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); }
+    if(pl && pl==g_player && sv){ float fbase=g_game_vol>0.0f?g_game_vol:0.75f; float fv=(float)v/1000.0f*fbase; (*e)->CallVoidMethod(e,pl,sv,fv,fv); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); }
     struct timespec ts; ts.tv_sec=0; ts.tv_nsec=15000000L; nanosleep(&ts,0);
   }
   LOGI("FADE end v=%d running=%d", v, g_fade_running); jdet(d); g_fade_running=0; g_fading=0; if(v<=0) light_stop(); g_cover=0; return 0;
@@ -399,7 +408,7 @@ static bool hook_prefix(patch_handle_t instance, void** args, const void* sig, v
     if(vol){ float b=*vol; if(b>0.0f && b<2.0f) g_game_vol=b; }
     static float last_gv = -1.0f;
     if(g_game_vol>0.0f && g_game_vol!=last_gv){ last_gv=g_game_vol; update_player_vol(); }
-    if(g_cover && g_cover_ms>0 && now_ms()-g_cover_ms > 4000){ LOGI("cover timeout force clear"); g_cover=0; }
+    if(g_cover && g_cover_ms>0 && now_ms()-g_cover_ms > 1500){ LOGI("cover timeout force clear"); g_cover=0; }
     int hit = -1;
     for(int i=0;i<g_count;i++){
         if(g_items[i].enable && !g_items[i].bad && g_items[i].music==idx){ hit=i; break; }
