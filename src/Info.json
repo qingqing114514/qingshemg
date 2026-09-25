@@ -2,7 +2,7 @@
   "pkgId": "eternal.future.audiopackextension",
   "name": "MusicPack Extension",
   "author": "qing",
-  "description": "【模块介绍】\n泰拉瑞亚 TEF 音乐替换模块。可按 MusicID 精确替换游戏 BGM（如 Boss 曲、主菜单曲）。替换曲支持 ogg/mp3/wav。\n\n【使用方法】\n1. 安装本模块后进入游戏（首次运行会在模块目录自动生成 config.json）。\n2. 把音频文件放进模块目录下的 music_packs 文件夹。\n3. 编辑 config.json。它是一个列表，每条代表把某首曲子换成某个文件。比如想把克眼（克苏鲁之眼）的曲子换成 a.mp3，就写：\n\n{ \"enable\": true, \"music\": 5, \"file\": \"a.mp3\" }\n\nenable —— 这条是否生效（true 开 / false 关）\nmusic —— 要替换的曲子编号\nfile —— music_packs 里的音频文件名，要带后缀\n\n4. 重启游戏生效。",
+  "description": "【模块介绍】\n- 按MusicID将游戏内音乐替换为自己的曲子（如:Boss战音乐、主菜单曲，环境等）。\n\n【使用方法】\n1. 安装模块后需加载并进入游戏一次，模块将在\n /storage/emulated/0/Android/data/eternal.future.tefmanager/files/module/private/eternal.future.audiopackextension/\n 自动创建 music_packs 和 config.json 。\n2. 将音频文件放进 music_packs 文件夹。\n3. 编辑 config.json 文件，格式：\n[\n  { \"enable\": true, \"music\": 5, \"file\": \"a.mp3\" },\n  { \"enable\": true, \"music\": 50, \"file\": \"menu.ogg\" }\n]\n enable —— 单条开关（true 开 / false 关）\n music  —— 要替换的音乐编号(需自行确认)\n file   —— music_packs 里的音频文件名\n4. 改完config.json需重启游戏才能生效。\n\n【说明】\n- 符合替换规则时：将覆盖原版音乐，播放替换曲，音量大小跟随游戏设置。\n- 当替换不生效时，请自行检查 config.json文件内容和替换数量（≤32条） 以及 music_packs内音频文件的文件名 \n- 支持的音频格式由安卓系统播放器决定（常见的有 mp3/ogg/wav/flac/m4a）\n【已知问题】\n- 替换曲为非平滑过渡，可能会感到生硬。\n- 调整音乐设置音量后约 0.5 秒才能作用于替换曲。\n- 首次进入游戏将逐个校验音频文件（约几秒），可能导致主菜单音乐可能延迟响应（如果替换了）。\n- 如果放入的音频文件过大，将会有很明显的播放延迟（建议单个文件不超过10MB）。\n- 在有背景音乐的事件期间，如果出现替换过音乐的BOSS战斗场景，可能会导致无Boss战音乐。\n- 在打boss的时候，请慎重进行环境切换，因为在某些特定的环境下(如:传奇空岛主岛)，会导致Boss战音乐无法正常播放，如遇到这个问题，换个环境，也许就能解决。",
   "version": "1.0.0",
   "versionCode": 1000,
   "dependence": [],
