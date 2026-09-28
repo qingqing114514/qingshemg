@@ -18,6 +18,8 @@ static void mp_ensure_files(const char * dir){
     mp_mkdirs(dir);
     char mp[900]; snprintf(mp,sizeof(mp),"%s/music_packs",dir);
     mp_mkdirs(mp);
+    char sfx[900]; snprintf(sfx,sizeof(sfx),"%s/sfx_packs",dir);
+    mp_mkdirs(sfx);
     char cfg[900]; snprintf(cfg,sizeof(cfg),"%s/config.json",dir);
     FILE* f=fopen(cfg,"rb");
     if(f){ fclose(f); return; }
