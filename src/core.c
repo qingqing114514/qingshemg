@@ -73,7 +73,7 @@ static void mpz_filelog(const char* fmt, ...){
 #endif
 static const module_info_t g_info = {
     .pkg_id = "eternal.future.audiopackextension", .name = "MusicPack Extension", .author = "qing",
-    .version = "1.1.11", .version_code = 1111, .api_version = 1,
+    .version = "1.1.0", .version_code = 1100, .api_version = 1,
     .plugin_dependencies_sizes = 0, .plugin_dependencies = 0,
 };
 #define MAX_ITEMS 256
