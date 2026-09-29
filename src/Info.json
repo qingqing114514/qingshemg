@@ -3,8 +3,8 @@
   "name": "MusicPack Extension",
   "author": "qing",
   "description": "【模块介绍】\n 替换游戏内音乐与音效\n\n【使用方法】\n1. 安装模块后启动游戏一次，模块将自动创建目录：\n   /storage/emulated/0/Android/data/eternal.future.tefmanager/files/module/private/eternal.future.audiopackextension/\n   内含 config.json(配置文件)、music_packs/（音乐）、sfx_packs/（音效）。\n2. 将音频文件放进对应文件夹。\n3. 编辑 config.json（最大两种各256条）：\n\n    音乐:{ \"enable\": true, \"music\": xx,  \"file\": \"xxx.xxx\" }\n    音效:{ \"enable\": true, \"type\": xx,  \"file\": \"xxx.xxx\" }\n 每条之间请用英文逗号隔开!!!\n\n   字段说明：\n     enable —— 单条开关（true 开 / false 关）\n     music  —— 音乐编号（音乐用，需自行确认）\n     type   —— 音效编号（音效用，需自行确认）\n     file   —— 对应文件夹里的音频文件名\n4. 改完 config.json 需重启游戏才生效。\n\n【说明】\n- 音频文件格式由安卓系统解码器决定（音乐常见 mp3/ogg/wav/flac/m4a；音效建议 ogg/mp3/wav）。\n- 替换不生效时检查 config.json 内容、数量（≤256）及文件名。\n- 替换曲非平滑过渡，可能生硬。\n- 首次进游戏逐个加载音效文件（约几秒），可能延迟主菜单音乐响应。\n- 音频文件过大将导致明显播放延迟（建议单个不超过10MB）。",
-  "version": "1.0.3",
-  "versionCode": 1003,
+  "version": "1.1.0",
+  "versionCode": 1100,
   "dependence": [],
   "support": {
     "android": {

@@ -73,7 +73,7 @@ static void mpz_filelog(const char* fmt, ...){
 #endif
 static const module_info_t g_info = {
     .pkg_id = "eternal.future.audiopackextension", .name = "MusicPack Extension", .author = "qing",
-    .version = "1.0.3", .version_code = 1003, .api_version = 1,
+    .version = "1.1.0", .version_code = 1100, .api_version = 1,
     .plugin_dependencies_sizes = 0, .plugin_dependencies = 0,
 };
 #define MAX_ITEMS 256
@@ -167,6 +167,24 @@ static void load_cfg_auto(void){
 static JavaVM* g_vm = 0;
 static jobject g_player = 0;
 static int g_active = -1;
+/* --- g_player 交接锁：所有对 g_player 的取/置必须走 pl_take/pl_install/pl_ref --- */
+static pthread_mutex_t g_plk = PTHREAD_MUTEX_INITIALIZER;
+/* 加锁读取当前 player，返回一个新的局部引用(可为 0)；调用方负责 DeleteLocalRef */
+static jobject pl_ref(JNIEnv* e){
+    pthread_mutex_lock(&g_plk);
+    jobject p = g_player;
+    if(p) p = (*e)->NewLocalRef(e, p);
+    pthread_mutex_unlock(&g_plk);
+    return p;
+}
+/* 取走当前 player 所有权并置空(返回可能是 0)；调用方负责 stop/release/DeleteGlobalRef */
+static jobject pl_take(void){
+    pthread_mutex_lock(&g_plk); jobject p = g_player; g_player = 0; pthread_mutex_unlock(&g_plk); return p;
+}
+/* 安装新 player(globalref)，返回被顶替的旧 player；调用方负责关掉旧值 */
+static jobject pl_install(jobject np){
+    pthread_mutex_lock(&g_plk); jobject old = g_player; g_player = np; pthread_mutex_unlock(&g_plk); return old;
+}
 const char* g_pack_sel = 0;
 static JNIEnv* jenv(int* det){
     if(!g_vm) return 0; JNIEnv* e=0; *det=0;
@@ -177,10 +195,9 @@ static JNIEnv* jenv(int* det){
 }
 static void jdet(int d){ if(d&&g_vm) (*g_vm)->DetachCurrentThread(g_vm); }
 static void light_stop(void){
-    if(!g_player) return;
-    jobject pl = g_player;
-    g_player = 0;
-    int d=0; JNIEnv* e=jenv(&d); if(!e) return;
+    jobject pl = pl_take();
+    if(!pl) return;
+    int d=0; JNIEnv* e=jenv(&d); if(!e){ pl_install(pl); return; }
     jclass c=(*e)->GetObjectClass(e,pl);
     if(c){
         jmethodID st=(*e)->GetMethodID(e,c,"stop","()V"); if(st) (*e)->CallVoidMethod(e,pl,st);
@@ -194,19 +211,19 @@ static void light_stop(void){
     LOGI("light_stop");
 }
 static void stop_player(void){
-    if(!g_player) return;
-    int d=0; JNIEnv* e=jenv(&d); if(!e){ g_player=0; return; }
-    jclass c=(*e)->GetObjectClass(e,g_player);
+    jobject pl = pl_take();
+    if(!pl) return;
+    int d=0; JNIEnv* e=jenv(&d); if(!e){ pl_install(pl); return; }
+    jclass c=(*e)->GetObjectClass(e,pl);
     if(c){
         jmethodID st=(*e)->GetMethodID(e,c,"stop","()V");
         jmethodID rl=(*e)->GetMethodID(e,c,"release","()V");
-        if(st) (*e)->CallVoidMethod(e,g_player,st);
-        if(rl) (*e)->CallVoidMethod(e,g_player,rl);
+        if(st) (*e)->CallVoidMethod(e,pl,st);
+        if(rl) (*e)->CallVoidMethod(e,pl,rl);
         (*e)->DeleteLocalRef(e,c);
     }
     if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e);
-    (*e)->DeleteGlobalRef(e,g_player);
-    g_player=0;
+    (*e)->DeleteGlobalRef(e,pl);
     g_playing_file[0]=0;
     g_playing_alive=0;
     jdet(d);
@@ -221,11 +238,14 @@ static void* play_thread_fn(void* a){
     return 0;
 }
 static void update_player_vol(void){
-    if(!g_player) return;
     if(g_fading || !g_playing_alive) return;
     int d=0; JNIEnv* e=jenv(&d); if(!e) return;
-    jclass c=(*e)->GetObjectClass(e,g_player);
-    if(c){ jmethodID sv=(*e)->GetMethodID(e,c,"setVolume","(FF)V"); if(sv){ float vv=g_game_vol>0.0f?g_game_vol:0.75f; if(vv>1.0f)vv=1.0f; (*e)->CallVoidMethod(e,g_player,sv,vv,vv); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); } (*e)->DeleteLocalRef(e,c); }
+    jobject pl=pl_ref(e);
+    if(pl){
+        jclass c=(*e)->GetObjectClass(e,pl);
+        if(c){ jmethodID sv=(*e)->GetMethodID(e,c,"setVolume","(FF)V"); if(sv){ float vv=g_game_vol>0.0f?g_game_vol:0.75f; if(vv>1.0f)vv=1.0f; (*e)->CallVoidMethod(e,pl,sv,vv,vv); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); } (*e)->DeleteLocalRef(e,c); }
+        (*e)->DeleteLocalRef(e,pl);
+    }
     jdet(d);
 }
 static void play_ogg_async(const char* file, int idx){
@@ -242,17 +262,25 @@ static void play_ogg_async(const char* file, int idx){
 }
 static int g_bg_paused = 0;
 static void pause_player(void){
-    if(!g_player || g_bg_paused) return;
+    if(g_bg_paused) return;
     int d=0; JNIEnv* e=jenv(&d); if(!e) return;
-    jclass c=(*e)->GetObjectClass(e,g_player);
-    if(c){ jmethodID pa=(*e)->GetMethodID(e,c,"pause","()V"); if(pa){ (*e)->CallVoidMethod(e,g_player,pa); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); g_bg_paused=1; LOGI("BG pause"); } (*e)->DeleteLocalRef(e,c); }
+    jobject pl=pl_ref(e);
+    if(pl){
+        jclass c=(*e)->GetObjectClass(e,pl);
+        if(c){ jmethodID pa=(*e)->GetMethodID(e,c,"pause","()V"); if(pa){ (*e)->CallVoidMethod(e,pl,pa); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); g_bg_paused=1; LOGI("BG pause"); } (*e)->DeleteLocalRef(e,c); }
+        (*e)->DeleteLocalRef(e,pl);
+    }
     jdet(d);
 }
 static void resume_player(void){
-    if(!g_player || !g_bg_paused) return;
+    if(!g_bg_paused) return;
     int d=0; JNIEnv* e=jenv(&d); if(!e) return;
-    jclass c=(*e)->GetObjectClass(e,g_player);
-    if(c){ jmethodID st=(*e)->GetMethodID(e,c,"start","()V"); if(st){ (*e)->CallVoidMethod(e,g_player,st); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); } (*e)->DeleteLocalRef(e,c); }
+    jobject pl=pl_ref(e);
+    if(pl){
+        jclass c=(*e)->GetObjectClass(e,pl);
+        if(c){ jmethodID st=(*e)->GetMethodID(e,c,"start","()V"); if(st){ (*e)->CallVoidMethod(e,pl,st); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); } (*e)->DeleteLocalRef(e,c); }
+        (*e)->DeleteLocalRef(e,pl);
+    }
     g_bg_paused=0; LOGI("BG resume");
     jdet(d);
 }
@@ -262,15 +290,17 @@ static int g_fade_running = 0;
 static pthread_t g_fade_thread;
 static void* fade_thread_fn(void* a){
   (void)a; int d=0; JNIEnv* e=jenv(&d); if(!e){g_fade_running=0;return 0;}
-  jobject pl = g_player; jmethodID sv=0;
-  if(pl){ jclass c=(*e)->GetObjectClass(e,pl); if(c) sv=(*e)->GetMethodID(e,c,"setVolume","(FF)V"); }
+  jobject pl = pl_ref(e);   /* 安全局部引用；若期间被换掉，下面会检测并放弃 */
+  jmethodID sv=0;
+  if(pl){ jclass c=(*e)->GetObjectClass(e,pl); if(c){ sv=(*e)->GetMethodID(e,c,"setVolume","(FF)V"); (*e)->DeleteLocalRef(e,c); } }
   int v=1000;
-  LOGI("FADE begin player=%p sv=%p", (void*)g_player, (void*)sv);
+  LOGI("FADE begin player=%p", (void*)pl);
   while(v>0 && g_fade_running){
     v-=15; if(v<0)v=0;
-    if(pl && pl==g_player && sv){ float fbase=g_game_vol>0.0f?g_game_vol:0.75f; float fv=(float)v/1000.0f*fbase; (*e)->CallVoidMethod(e,pl,sv,fv,fv); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); }
+    if(pl && sv){ float fbase=g_game_vol>0.0f?g_game_vol:0.75f; float fv=(float)v/1000.0f*fbase; (*e)->CallVoidMethod(e,pl,sv,fv,fv); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); }
     struct timespec ts; ts.tv_sec=0; ts.tv_nsec=15000000L; nanosleep(&ts,0);
   }
+  if(pl)(*e)->DeleteLocalRef(e,pl);
   LOGI("FADE end v=%d running=%d", v, g_fade_running); jdet(d); if(v<=0){ light_stop(); g_active=-1; g_cover=0; g_release=1; g_release_ms=now_ms(); } g_fading=0; g_fade_running=0; return 0;
 }
 static void start_fade(void){
@@ -358,11 +388,19 @@ static void start_verify_all(void){
 }
 static int resolve_audio(const char* file, const char* pack, char* out, int cap){
     (void)pack;
+    /* 1) 优先 cache 目录(如存在同名文件) */
     if(g_cache_dir[0]){
         char dst[700]; snprintf(dst,sizeof(dst),"%s/%s",g_cache_dir,file);
         struct stat st;
         if(stat(dst,&st)==0 && st.st_size>0){ snprintf(out,cap,"%s",dst); return 1; }
     }
+    /* 2) music_packs/<pack>/<file> (pack 非空时) */
+    if(pack && pack[0]){
+        char p1[700]; snprintf(p1,sizeof(p1),"%s/music_packs/%s/%s",g_dir,pack,file);
+        struct stat st1;
+        if(stat(p1,&st1)==0 && st1.st_size>0){ snprintf(out,cap,"%s",p1); return 1; }
+    }
+    /* 3) music_packs/<file> */
     snprintf(out,cap,"%s/music_packs/%s",g_dir,file);
     return 1;
 }
@@ -423,8 +461,18 @@ static void play_ogg(const char* file){
     { jmethodID sv=(*e)->GetMethodID(e,c,"setVolume","(FF)V"); if(sv){ float base = g_game_vol>0.0f ? g_game_vol : 0.75f; float vv=base; if(vv>1.0f)vv=1.0f; (*e)->CallVoidMethod(e,mp,sv,vv,vv); } }
     (*e)->CallVoidMethod(e,mp,st);
     if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e);
-    if(g_player){ (*e)->DeleteGlobalRef(e,g_player); g_player=0; }
-    g_player=(*e)->NewGlobalRef(e,mp);
+    {
+        jobject gnew=(*e)->NewGlobalRef(e,mp);
+        jobject old=pl_install(gnew);   /* 装上新的，拿回旧的 */
+        if(old){
+            /* 关掉被顶替的旧实例 */
+            jclass oc=(*e)->GetObjectClass(e,old);
+            if(oc){ jmethodID ost=(*e)->GetMethodID(e,oc,"stop","()V"); jmethodID orl=(*e)->GetMethodID(e,oc,"release","()V");
+                if(ost)(*e)->CallVoidMethod(e,old,ost); if(orl)(*e)->CallVoidMethod(e,old,orl); (*e)->DeleteLocalRef(e,oc); }
+            if((*e)->ExceptionOccurred(e))(*e)->ExceptionClear(e);
+            (*e)->DeleteGlobalRef(e,old);
+        }
+    }
     LOGI("PLAY %s", full);
     jdet(d);
 }
@@ -444,14 +492,28 @@ static int sfx_lookup(int type){
 static int sfx_load_file(JNIEnv* e, const char* path){
     jclass clsSPc=(*e)->FindClass(e,"android/media/SoundPool"); (*e)->ExceptionClear(e);
     if(!clsSPc) return 0;
-    jmethodID load=(*e)->GetMethodID(e,clsSPc,"load","(Ljava/lang/String;I)I"); (*e)->ExceptionClear(e);
-    if(!load) return 0;
-    jstring js=(*e)->NewStringUTF(e,path);
-    int sid=(*e)->CallIntMethod(e,g_sfxpool,load,js,(jint)1);
-    if((*e)->ExceptionOccurred(e)){ (*e)->ExceptionClear(e); sid=0; }
-    (*e)->DeleteLocalRef(e,js);
+    jmethodID loadPath=(*e)->GetMethodID(e,clsSPc,"load","(Ljava/lang/String;I)I"); (*e)->ExceptionClear(e);
+    if(!loadPath) return 0;
+    int nfd = open(path, O_RDONLY);
+    if(nfd < 0){ LOGE("sfx: open fail errno=%d %s", errno, path); return 0; }
+    close(nfd);
+    jstring jpath=(*e)->NewStringUTF(e,path);
+    if(!jpath) return 0;
+    int sid=(*e)->CallIntMethod(e,g_sfxpool,loadPath,jpath,(jint)1);
+    jobject exA=(*e)->ExceptionOccurred(e);
+    if(exA){
+        jclass clsT=(*e)->FindClass(e,"java/lang/Throwable");
+        jmethodID gmsg=(*e)->GetMethodID(e,clsT,"toString","()Ljava/lang/String;");
+        jstring ms=(*e)->CallObjectMethod(e,exA,gmsg);
+        const char* cs=(*e)->GetStringUTFChars(e,ms,0);
+        LOGE("sfx: load EX: %s", cs?cs:"?");
+        if(cs)(*e)->ReleaseStringUTFChars(e,ms,cs);
+        (*e)->DeleteLocalRef(e,ms); (*e)->ExceptionClear(e); sid=0;
+    }
+    (*e)->DeleteLocalRef(e,jpath);
     return sid;
 }
+
 
 static void sfx_scan_load(void){
     int d0=0; JNIEnv* e=jenv(&d0);
@@ -514,7 +576,9 @@ static void sfx_play(int type, float vol){
     if(c){ jmethodID pl=(*e)->GetMethodID(e,c,"play","(IFFIIF)I");
         if(pl){ float vv=vol; if(vv<0)vv=0; if(vv>1)vv=1;
             (*e)->CallIntMethod(e,g_sfxpool,pl,(jint)sid,vv,vv,(jint)1,(jint)0,(jfloat)1.0f);
-            if((*e)->ExceptionOccurred(e))(*e)->ExceptionClear(e); }
+            jobject ex=(*e)->ExceptionOccurred(e);
+            if(ex){ (*e)->ExceptionClear(e); }
+        }
         (*e)->DeleteLocalRef(e,c); }
     jdet(d);
 }
@@ -523,8 +587,10 @@ static bool sfx_prefix(patch_handle_t inst, void** args, const patch_method_sign
     (void)inst;(void)sig;(void)result;
     if(!args) return false;
     if(!g_sfx_ok) return false;
+    if(!args[0]) return false;
     int type=*(int*)args[0];
-    if(sfx_lookup(type)<=0) return false;
+    int sid=sfx_lookup(type);
+    if(sid<=0) return false;
     float vol=1.0f;
     if(args[4]){ float v=*(float*)args[4]; if(v>=0.0f && v<=1.0f) vol=v; }
     sfx_play(type, vol);
@@ -541,7 +607,6 @@ static bool hook_prefix(patch_handle_t instance, void** args, const void* sig, v
     int idx = args[1] ? *(int*)args[1] : -1;
     { static int last_idx=-999; if(idx!=last_idx){ last_idx=idx; LOGI("IDX -> %d", idx); } }
     float* vol = args[2] ? (float*)args[2] : 0;
-    float vol_raw = vol ? *vol : -1.0f;
     if(vol){ float b=*vol; if(b>0.0f && b<2.0f) g_game_vol=b; }
     static float last_gv = -1.0f;
     if(g_game_vol>0.0f && g_game_vol!=last_gv){ last_gv=g_game_vol; update_player_vol(); }
@@ -589,11 +654,6 @@ static bool hook_prefix(patch_handle_t instance, void** args, const void* sig, v
             if(vol) *vol = g_game_vol>0.0f ? g_game_vol : 0.75f;
         }
     }
-    { static int cnt=0;
-      if((g_active!=-1 || g_fading || g_cover) && (cnt++ % 8)==0){
-        LOGI("DBG idx=%d raw=%.3f now=%.3f active=%d fade=%d cover=%d leave=%ld", idx, vol_raw, vol?*vol:-1.0f, g_active, g_fading, g_cover, g_leave_ms?(now_ms()-g_leave_ms):0L);
-      }
-    }
     return false;
 }
 static bool init_module(module_entry_t* entry){
@@ -614,7 +674,6 @@ static bool init_module(module_entry_t* entry){
     else LOGE("no JNI_GetCreatedJavaVMs");
     load_cfg_auto();
     sfx_init();
-    for(int i=0;i<g_count;i++){ if(g_items[i].enable && g_items[i].music==50 && g_items[i].file[0]){ g_items[i].bad = probe_file(g_items[i].file)?0:1; LOGI("VERIFY menu idx=%d bad=%d file=%s", i, g_items[i].bad, g_items[i].file); break; } }
     start_verify_all();
     start_watchdog();
 
