@@ -73,7 +73,7 @@ static void mpz_filelog(const char* fmt, ...){
 #endif
 static const module_info_t g_info = {
     .pkg_id = "eternal.future.audiopackextension", .name = "MusicPack Extension", .author = "qing",
-    .version = "1.1.0", .version_code = 1100, .api_version = 1,
+    .version = "1.1.11", .version_code = 1111, .api_version = 1,
     .plugin_dependencies_sizes = 0, .plugin_dependencies = 0,
 };
 #define MAX_ITEMS 256
@@ -166,6 +166,7 @@ static void load_cfg_auto(void){
 
 static JavaVM* g_vm = 0;
 static jobject g_player = 0;
+static jobject g_fade_player = 0; /* 淡出专用 global ref，与 g_player 同步 */
 static int g_active = -1;
 /* --- g_player 交接锁：所有对 g_player 的取/置必须走 pl_take/pl_install/pl_ref --- */
 static pthread_mutex_t g_plk = PTHREAD_MUTEX_INITIALIZER;
@@ -179,11 +180,11 @@ static jobject pl_ref(JNIEnv* e){
 }
 /* 取走当前 player 所有权并置空(返回可能是 0)；调用方负责 stop/release/DeleteGlobalRef */
 static jobject pl_take(void){
-    pthread_mutex_lock(&g_plk); jobject p = g_player; g_player = 0; pthread_mutex_unlock(&g_plk); return p;
+    pthread_mutex_lock(&g_plk); jobject p = g_player; g_player = 0; g_fade_player = 0; pthread_mutex_unlock(&g_plk); return p;
 }
 /* 安装新 player(globalref)，返回被顶替的旧 player；调用方负责关掉旧值 */
 static jobject pl_install(jobject np){
-    pthread_mutex_lock(&g_plk); jobject old = g_player; g_player = np; pthread_mutex_unlock(&g_plk); return old;
+    pthread_mutex_lock(&g_plk); jobject old = g_player; g_player = np; g_fade_player = np; pthread_mutex_unlock(&g_plk); return old;
 }
 const char* g_pack_sel = 0;
 static JNIEnv* jenv(int* det){
@@ -290,7 +291,8 @@ static int g_fade_running = 0;
 static pthread_t g_fade_thread;
 static void* fade_thread_fn(void* a){
   (void)a; int d=0; JNIEnv* e=jenv(&d); if(!e){g_fade_running=0;return 0;}
-  jobject pl = pl_ref(e);   /* 安全局部引用；若期间被换掉，下面会检测并放弃 */
+  jobject pl = 0;
+  { pthread_mutex_lock(&g_plk); pl = g_fade_player; pthread_mutex_unlock(&g_plk); }
   jmethodID sv=0;
   if(pl){ jclass c=(*e)->GetObjectClass(e,pl); if(c){ sv=(*e)->GetMethodID(e,c,"setVolume","(FF)V"); (*e)->DeleteLocalRef(e,c); } }
   int v=1000;
@@ -300,11 +302,13 @@ static void* fade_thread_fn(void* a){
     if(pl && sv){ float fbase=g_game_vol>0.0f?g_game_vol:0.75f; float fv=(float)v/1000.0f*fbase; (*e)->CallVoidMethod(e,pl,sv,fv,fv); if((*e)->ExceptionOccurred(e)) (*e)->ExceptionClear(e); }
     struct timespec ts; ts.tv_sec=0; ts.tv_nsec=15000000L; nanosleep(&ts,0);
   }
-  if(pl)(*e)->DeleteLocalRef(e,pl);
   LOGI("FADE end v=%d running=%d", v, g_fade_running); jdet(d); if(v<=0){ light_stop(); g_active=-1; g_cover=0; g_release=1; g_release_ms=now_ms(); } g_fading=0; g_fade_running=0; return 0;
 }
 static void start_fade(void){
-  LOGI("start_fade fading=%d player=%p", g_fading, (void*)g_player);
+  int d0=0; JNIEnv* e0=jenv(&d0); jobject chk = e0 ? pl_ref(e0) : 0;
+  LOGI("start_fade fading=%d player=%p ref=%p", g_fading, (void*)g_player, (void*)chk);
+  if(chk && e0) (*e0)->DeleteLocalRef(e0,chk);
+  if(d0) jdet(d0);
   if(!g_player){ g_active=-1; g_cover=0; g_release=1; g_release_ms=now_ms(); return; }
   if(g_fading){ g_fade_start_ms=now_ms(); g_cover_ms=now_ms(); return; } g_fading=1; g_fade_start_ms=now_ms(); g_fade_running=1; int r=pthread_create(&g_fade_thread,0,fade_thread_fn,0); if(r!=0){g_fading=0;g_fade_running=0;} else pthread_detach(g_fade_thread);
 }
@@ -598,6 +602,36 @@ static bool sfx_prefix(patch_handle_t inst, void** args, const patch_method_sign
 }
 
 
+/* 同曲归一：50(旅程开始含前奏) 与 51(旅程开始) 是同一首歌 */
+static int music_norm(int idx){
+    if(idx == 50) return 51;
+    return idx;
+}
+
+/* 该 idx 是否被我们配置了替换 */
+static int music_is_replaced(int idx){
+    if(idx < 0) return 0;
+    for(int i=0;i<g_count;i++){
+        if(g_items[i].enable && !g_items[i].bad && music_norm(g_items[i].music)==music_norm(idx)) return 1;
+    }
+    return 0;
+}
+
+/* 原版"旧曲淡出停止"钩子：当我们的替换曲还在播(g_active!=-1)时，把原版退场曲音量压 0，
+   避免进世界时原版主菜单曲与替换曲同时出声 */
+static bool hook_stop_prefix(patch_handle_t instance, void** args, const void* sig, void* result){
+    (void)instance; (void)result; (void)sig;
+    if(!args) return false;
+    /* 参数: A[0]=int, A[1]=float(音量), A[2]=double, A[3]=bool */
+    if(args[0] && args[1]){
+        int sidx = music_norm(*(int*)args[0]);
+        if(sidx >= 0 && music_is_replaced(sidx)){
+            float* vol = (float*)args[1];
+            if(*vol > 0.0f){ *vol = 0.0f; }
+        }
+    }
+    return false;
+}
 static bool hook_prefix(patch_handle_t instance, void** args, const void* sig, void* result){
 
     (void)instance; (void)result; (void)sig;
@@ -605,20 +639,21 @@ static bool hook_prefix(patch_handle_t instance, void** args, const void* sig, v
     g_last_hook_ms = now_ms();
     if(g_bg_paused) resume_player();
     int idx = args[1] ? *(int*)args[1] : -1;
+    idx = music_norm(idx);
     { static int last_idx=-999; if(idx!=last_idx){ last_idx=idx; LOGI("IDX -> %d", idx); } }
     float* vol = args[2] ? (float*)args[2] : 0;
-    if(vol){ float b=*vol; if(b>0.0f && b<2.0f) g_game_vol=b; }
-    static float last_gv = -1.0f;
-    if(g_game_vol>0.0f && g_game_vol!=last_gv){ last_gv=g_game_vol; update_player_vol(); }
+    float raw_b = 0.0f;
+    if(vol){ float b=*vol; if(b>0.0f && b<2.0f) raw_b=b; }
     if(g_cover && g_active==-1 && g_cover_ms>0 && now_ms()-g_cover_ms > 1500){ LOGI("cover timeout force clear"); g_cover=0; }
     int hit = -1;
     for(int i=0;i<g_count;i++){
-        if(g_items[i].enable && !g_items[i].bad && g_items[i].music==idx){ hit=i; break; }
+        if(g_items[i].enable && !g_items[i].bad && music_norm(g_items[i].music)==idx){ hit=i; break; }
     }
     int failed = (g_play_fail && g_fail_music==idx);
     if(hit>=0){
         if(!failed){
             if(vol) *vol = 0.0f;
+            if(raw_b>0.0f){ static float lgv=-1.0f; if(raw_b!=lgv){ lgv=raw_b; g_game_vol=raw_b; update_player_vol(); } }
             g_cover = 1; g_cover_ms = now_ms();
             if(g_fading){ LOGI("HIT during fade -> cancel fade, resume"); g_fade_running = 0; g_fading = 0; update_player_vol(); }
             if(g_release){ LOGI("HIT during release-delay -> cancel release"); g_release = 0; }
@@ -649,9 +684,8 @@ static bool hook_prefix(patch_handle_t instance, void** args, const void* sig, v
     }
     if(g_release){
         if(!g_fading && g_active==-1 && now_ms()-g_release_ms > 1500){
-            LOGI("release original vol after %ldms", now_ms()-g_release_ms);
+            LOGI("release-delay done (no vol restore)");
             g_release = 0; g_cover = 0;
-            if(vol) *vol = g_game_vol>0.0f ? g_game_vol : 0.75f;
         }
     }
     return false;
@@ -680,10 +714,14 @@ static bool init_module(module_entry_t* entry){
     patch_handle_t TLAS = patchlib_type_get_type("Terraria.Audio","LegacyAudioSystem");
     LOGI("TLAS=%p", TLAS);
     if(TLAS){
+        { tefstd_vector_t mv; if(tefstd_vector_init(&mv,sizeof(patch_handle_t))){ if(patchlib_type_get_methods(TLAS,0,&mv)){ int mn=(int)mv.size; patch_handle_t* md=(patch_handle_t*)mv.data; LOGI("LAS methods=%d", mn); for(int mi=0;mi<mn;mi++){ patch_handle_t mm=md[mi]; const char* nm=mm?patchlib_method_get_name(mm):0; if(nm) LOGI("  M[%d]=%s pc=%d", mi, nm, patchlib_method_get_param_count(mm)); } } tefstd_vector_destroy(&mv); } }
         patch_handle_t mUCT = patchlib_type_get_method(TLAS,"UpdateCommonTrack");
         LOGI("m.UCT=%p pc=%d", mUCT, mUCT?patchlib_method_get_param_count(mUCT):-1);
         if(mUCT){
-            patchlib_install_prepost_hook(mUCT, hook_prefix, 0);
+            LOGI("UCT hook=%d",(int)patchlib_install_prepost_hook(mUCT, hook_prefix, 0));
+            patch_handle_t mStop = patchlib_type_get_method(TLAS,"UpdateCommonTrackTowardStopping");
+            LOGI("m.Stop=%p pc=%d", mStop, mStop?patchlib_method_get_param_count(mStop):-1);
+            if(mStop) LOGI("STOP hook=%d",(int)patchlib_install_prepost_hook(mStop, hook_stop_prefix, 0));
         }
     }
     {
