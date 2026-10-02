@@ -3,15 +3,15 @@
 2,Eerie,阴森
 3,OverworldNight,地表夜晚
 4,Underground,地下
-5,Boss1,Boss1
+5,EyeOfCthulhu,克苏鲁之眼
 6,TitleClassic,经典标题
 7,JungleDay,丛林白天
 8,Corruption,腐化之地
 9,Hallow,神圣之地
 10,UndergroundCorruption,地下腐化
 11,UndergroundHallow,地下神圣
-12,Boss2,Boss2
-13,Boss3,Boss3
+12,WallOfFlesh,血肉墙(肉山)
+13,BrainOfCthulhu,克苏鲁之脑
 14,Snow,雪原
 15,SpaceNight,太空夜晚
 16,Crimson,猩红之地
@@ -23,7 +23,7 @@
 22,OceanDay,海洋白天
 23,Dungeon,地牢
 24,Plantera,世纪之花
-25,Boss5,Boss5
+25,Medusa,美杜莎
 26,Temple,神庙
 27,Eclipse,日食
 28,RainAmbience,雨声氛围
